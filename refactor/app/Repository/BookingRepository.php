@@ -70,13 +70,13 @@ class BookingRepository extends BaseRepository
             $usertype = 'translator';
         }
         if ($jobs) {
-            foreach ($jobs as $jobitem) {
-                if ($jobitem->immediate == 'yes') {
-                    $emergencyJobs[] = $jobitem;
-                } else {
-                    $noramlJobs[] = $jobitem;
-                }
-            }
+       	 $emergencyJobs[] = $jobs->filter(function ($jobitem) {
+       		 return $jobitem->immediate=='yes';
+    		});
+    		 $noramlJobs[] = $jobs->filter(function ($jobitem) {
+       		 return !$jobitem->immediate=='yes';;
+    		});
+    		
             $noramlJobs = collect($noramlJobs)->each(function ($item, $key) use ($user_id) {
                 $item['usercheck'] = Job::checkParticularJob($user_id, $item);
             })->sortBy('due')->all();
@@ -459,15 +459,19 @@ class BookingRepository extends BaseRepository
         $gender = $user_meta->gender;
         $translator_level = $user_meta->translator_level;
         $job_ids = Job::getJobs($user_id, $job_type, 'pending', $userlanguage, $gender, $translator_level);
-        foreach ($job_ids as $k => $v)     // checking translator town
-        {
-            $job = Job::find($v->id);
-            $jobuserid = $job->user_id;
-            $checktown = Job::checkTowns($jobuserid, $user_id);
-            if (($job->customer_phone_type == 'no' || $job->customer_phone_type == '') && $job->customer_physical_type == 'yes' && $checktown == false) {
-                unset($job_ids[$k]);
-            }
-        }
+        
+         // checking translator town
+        $job_ids = $job_ids->filter(function ($v,$k) {
+                    $job = Job::find($v->id);
+		    $jobuserid = $job->user_id;
+		    $checktown = Job::checkTowns($jobuserid, $user_id);
+		    if (!($job->customer_phone_type == 'no' || $job->customer_phone_type == '') && $job->customer_physical_type != 'yes' && $checktown == true) {
+			return $v;
+		    }
+
+    		});
+
+       
         $jobs = TeHelper::convertJobIdsInObjs($job_ids);
         return $jobs;
     }
@@ -2115,8 +2119,16 @@ class BookingRepository extends BaseRepository
         $jobid = $request['jobid'];
         $userid = $request['userid'];
 
-        $job = Job::find($jobid);
-        $job = $job->toArray();
+        $job = Job::find($jobid)->toArray();
+ 
+ 	$data = [
+		'created_at'  => date('Y-m-d H:i:s'),
+		'will_expire_at' => TeHelper::willExpireAt($job['due'], $data['created_at']),
+		'updated_at'        => date('Y-m-d H:i:s'),
+		'user_id' => $userid,
+		'job_id'       => $jobid,
+		'cancel_at'       => Carbon::now()
+		];
 
         $data = array();
         $data['created_at'] = date('Y-m-d H:i:s');
@@ -2126,27 +2138,20 @@ class BookingRepository extends BaseRepository
         $data['job_id'] = $jobid;
         $data['cancel_at'] = Carbon::now();
 
-        $datareopen = array();
-        $datareopen['status'] = 'pending';
-        $datareopen['created_at'] = Carbon::now();
-        $datareopen['will_expire_at'] = TeHelper::willExpireAt($job['due'], $datareopen['created_at']);
-        //$datareopen['updated_at'] = date('Y-m-d H:i:s');
-
-//        $this->logger->addInfo('USER #' . Auth::user()->id . ' reopen booking #: ' . $jobid);
-
         if ($job['status'] != 'timedout') {
             $affectedRows = Job::where('id', '=', $jobid)->update($datareopen);
             $new_jobid = $jobid;
         } else {
-            $job['status'] = 'pending';
-            $job['created_at'] = Carbon::now();
-            $job['updated_at'] = Carbon::now();
-            $job['will_expire_at'] = TeHelper::willExpireAt($job['due'], date('Y-m-d H:i:s'));
-            $job['updated_at'] = date('Y-m-d H:i:s');
-            $job['cust_16_hour_email'] = 0;
-            $job['cust_48_hour_email'] = 0;
-            $job['admin_comments'] = 'This booking is a reopening of booking #' . $jobid;
-            //$job[0]['user_email'] = $user_email;
+        	$job = [
+        	'status'=>'pending',
+		'created_at'  => Carbon::now(),
+		'will_expire_at' => TeHelper::willExpireAt($job['due'], date('Y-m-d H:i:s')),
+		'updated_at'        => Carbon::now(),
+		'cust_16_hour_email' => 0,
+		'cust_48_hour_email'       => 0,
+		'admin_comments'       => 'This booking is a reopening of booking #' . $jobid
+		];
+		
             $affectedRows = Job::create($job);
             $new_jobid = $affectedRows['id'];
         }
